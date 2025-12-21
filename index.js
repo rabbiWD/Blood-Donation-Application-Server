@@ -30,7 +30,7 @@ async function run() {
 
     app.get("/users", async (req, res) => {
       try {
-        const total = await userCollection.countDocuments({});
+        const total = await userCollections.countDocuments({});
         res.send({ totalUsers: total });
       } catch (err) {
         console.error("Users count error:", err);
@@ -47,19 +47,59 @@ async function run() {
       res.send(result)
     })
 
-    app.get("/users/role/:email", async (req, res) => {
-      const { email } = req.params;
-      try {
-        const user = await userCollection.findOne(
-          { email: email.toLowerCase().trim() },
-          { projection: { role: 1, status: 1, _id: 0 } }
-        );
-        res.send({ role: user?.role || "donor", status: user?.status || "active" });
-      } catch (err) {
-        console.error("Role fetch error:", err);
-        res.status(500).send({ role: "donor" });
-      }
-    });
+    // app.get("/users/role/:email", async (req, res) => {
+    //   const { email } = req.params;
+    //   try {
+    //     const user = await userCollections.findOne(
+    //       { email: email.toLowerCase().trim() },
+    //       { projection: { role: 1, status: 1, _id: 0 } }
+    //     );
+    //     res.send({ role: user?.role || "donor", status: user?.status || "active" });
+    //   } catch (err) {
+    //     console.error("Role fetch error:", err);
+    //     res.status(500).send({ role: "donor" });
+    //   }
+    // });
+
+    // GET user role by email
+app.get("/user/role/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+
+    const user = await User.findOne({ email: email }); // MongoDB query (আপনার মডেল অনুযায়ী)
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json({ role: user.role || "donor", status: user.status || "active" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Public route: Search donors
+app.get("/search/donors", async (req, res) => {
+  try {
+    const { bloodGroup, district, upazila } = req.query;
+
+    let query = { role: "donor", status: "active" };
+
+    if (bloodGroup) query.bloodGroup = bloodGroup;
+    if (district) query.district = district;
+    if (upazila) query.upazila = upazila;
+
+    const donors = await User.find(query).select(
+      "name bloodGroup district upazila photoURL status"
+    );
+
+    res.json(donors);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 
 
 
