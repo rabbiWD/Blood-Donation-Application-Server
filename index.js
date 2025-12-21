@@ -28,7 +28,15 @@ async function run() {
     const donorsCollection = db.collection('donors')
     const fundingsCollection = db.collection('fundings')
 
-    
+    app.get("/users", async (req, res) => {
+      try {
+        const total = await userCollection.countDocuments({});
+        res.send({ totalUsers: total });
+      } catch (err) {
+        console.error("Users count error:", err);
+        res.status(500).send({ totalUsers: 0 });
+      }
+    });
 
 
     app.post('/users', async(req,res)=>{
