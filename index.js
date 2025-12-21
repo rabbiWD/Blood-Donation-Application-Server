@@ -26,6 +26,10 @@ async function run() {
     const db = client.db('blood_db');
     const userCollections = db.collection('users')
     const donorsCollection = db.collection('donors')
+    const fundingsCollection = db.collection('fundings')
+
+    
+
 
     app.post('/users', async(req,res)=>{
       const userInfo = req.body;
@@ -34,6 +38,20 @@ async function run() {
       const result = await userCollections.insertOne(userInfo);
       res.send(result)
     })
+
+    app.get("/users/role/:email", async (req, res) => {
+      const { email } = req.params;
+      try {
+        const user = await userCollection.findOne(
+          { email: email.toLowerCase().trim() },
+          { projection: { role: 1, status: 1, _id: 0 } }
+        );
+        res.send({ role: user?.role || "donor", status: user?.status || "active" });
+      } catch (err) {
+        console.error("Role fetch error:", err);
+        res.status(500).send({ role: "donor" });
+      }
+    });
 
 
 
