@@ -101,6 +101,34 @@ app.get("/search/donors", async (req, res) => {
   }
 });
 
+// PATCH: Confirm donation - change status to inprogress
+app.patch("/donation-requests/:id/donate", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { donorName, donorEmail, status } = req.body;
+
+    const updatedRequest = await DonationRequest.findByIdAndUpdate(
+      id,
+      {
+        status: status || "inprogress",
+        donorName,
+        donorEmail,
+        donatedAt: new Date(),
+      },
+      { new: true }
+    );
+
+    if (!updatedRequest) {
+      return res.status(404).json({ message: "Request not found" });
+    }
+
+    res.json(updatedRequest);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 
 
 
