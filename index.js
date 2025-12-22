@@ -165,6 +165,17 @@ app.patch("/donation-request/:id/status", async (req, res) => {
   }
 });
 
+// 3. Delete request
+app.delete("/donation-requests/:id", async (req, res) => {
+  try {
+    const deleted = await DonationRequest.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ message: "Not found" });
+    res.json({ message: "Deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 
 
 
