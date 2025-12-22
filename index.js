@@ -66,8 +66,9 @@ app.get("/user/role/:email", async (req, res) => {
   try {
     const { email } = req.params;
 
-    const user = await User.findOne({ email: email }); // MongoDB query (আপনার মডেল অনুযায়ী)
-
+    const user = await userCollections.findOne({ email: email }); // MongoDB query (আপনার মডেল অনুযায়ী)
+    console.log(user)
+    
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -125,6 +126,25 @@ app.patch("/donation-requests/:id/donate", async (req, res) => {
     res.json(updatedRequest);
   } catch (error) {
     console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// 1. Get recent requests (limit optional)
+app.get("/my-donation-request/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+    const limit = parseInt(req.query.limit) || null;
+
+    let query = DonationRequest.find({ requesterEmail: email })
+      .select("recipientName bloodGroup district upazila donationDate donationTime status donorName donorEmail")
+      .sort({ createdAt: -1 });
+
+    if (limit) query = query.limit(limit);
+
+    const requests = await query;
+    res.json(requests);
+  } catch (error) {
     res.status(500).json({ message: "Server error" });
   }
 });
