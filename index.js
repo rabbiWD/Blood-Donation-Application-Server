@@ -1,16 +1,15 @@
-const express = require('express')
+const express = require('express');
 const cors = require('cors');
-const app = express()
+const app = express();
 require('dotenv').config();
-const { MongoClient, ServerApiVersion } = require('mongodb');
-const port = process.env.PORT || 3000
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const port = process.env.PORT || 3000;
 
-app.use(cors())
-app.use(express.json())
-
+app.use(cors());
+app.use(express.json());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.vuj5cyn.mongodb.net/?appName=Cluster0`;
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
+
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -18,227 +17,249 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   }
 });
+
 async function run() {
   try {
-    
     await client.connect();
 
     const db = client.db('blood_db');
-    const userCollections = db.collection('users')
-    const donorsCollection = db.collection('donors')
-    const fundingsCollection = db.collection('fundings')
+    const userCollections = db.collection('users');
+    const donationRequestsCollection = db.collection('donation_requests');
 
+    // 1. Total users count
     app.get("/users", async (req, res) => {
       try {
         const total = await userCollections.countDocuments({});
-        res.send({ totalUsers: total });
+        res.json({ totalUsers: total });
       } catch (err) {
         console.error("Users count error:", err);
-        res.status(500).send({ totalUsers: 0 });
+        res.status(500).json({ totalUsers: 0 });
       }
     });
 
+    // 2. Create user (on registration)
+    app.post('/users', async (req, res) => {
+      try {
+        const userInfo = req.body;
+        userInfo.createdAt = new Date();
+        userInfo.role = 'donor';
+        userInfo.status = 'active';
 
-    app.post('/users', async(req,res)=>{
-      const userInfo = req.body;
-      userInfo.createdAt = new Date();
-      userInfo.role = 'donor'
-      const result = await userCollections.insertOne(userInfo);
-      res.send(result)
-    })
-
-    // app.get("/users/role/:email", async (req, res) => {
-    //   const { email } = req.params;
-    //   try {
-    //     const user = await userCollections.findOne(
-    //       { email: email.toLowerCase().trim() },
-    //       { projection: { role: 1, status: 1, _id: 0 } }
-    //     );
-    //     res.send({ role: user?.role || "donor", status: user?.status || "active" });
-    //   } catch (err) {
-    //     console.error("Role fetch error:", err);
-    //     res.status(500).send({ role: "donor" });
-    //   }
-    // });
-
-    // GET user role by email
-app.get("/user/role/:email", async (req, res) => {
-  try {
-    const { email } = req.params;
-
-    const user = await userCollections.findOne({ email: email }); // MongoDB query (আপনার মডেল অনুযায়ী)
-    console.log(user)
-    
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    res.json({ role: user.role || "donor", status: user.status || "active" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// Public route: Search donors
-app.get("/search/donors", async (req, res) => {
-  try {
-    const { bloodGroup, district, upazila } = req.query;
-
-    let query = { role: "donor", status: "active" };
-
-    if (bloodGroup) query.bloodGroup = bloodGroup;
-    if (district) query.district = district;
-    if (upazila) query.upazila = upazila;
-
-    const donors = await User.find(query).select(
-      "name bloodGroup district upazila photoURL status"
-    );
-
-    res.json(donors);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// PATCH: Confirm donation - change status to inprogress
-app.patch("/donation-requests/:id/donate", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { donorName, donorEmail, status } = req.body;
-
-    const updatedRequest = await DonationRequest.findByIdAndUpdate(
-      id,
-      {
-        status: status || "inprogress",
-        donorName,
-        donorEmail,
-        donatedAt: new Date(),
-      },
-      { new: true }
-    );
-
-    if (!updatedRequest) {
-      return res.status(404).json({ message: "Request not found" });
-    }
-
-    res.json(updatedRequest);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// 1. Get recent requests (limit optional)
-app.get("/my-donation-request/:email", async (req, res) => {
-  try {
-    const { email } = req.params;
-    const limit = parseInt(req.query.limit) || null;
-
-    let query = DonationRequest.find({ requesterEmail: email })
-      .select("recipientName bloodGroup district upazila donationDate donationTime status donorName donorEmail")
-      .sort({ createdAt: -1 });
-
-    if (limit) query = query.limit(limit);
-
-    const requests = await query;
-    res.json(requests);
-  } catch (error) {
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// 2. Update status (Done / Cancel)
-app.patch("/donation-request/:id/status", async (req, res) => {
-  try {
-    const { status } = req.body;
-    const updated = await DonationRequest.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true }
-    );
-    if (!updated) return res.status(404).json({ message: "Not found" });
-    res.json(updated);
-  } catch (error) {
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// 3. Delete request
-app.delete("/donation-requests/:id", async (req, res) => {
-  try {
-    const deleted = await DonationRequest.findByIdAndDelete(req.params.id);
-    if (!deleted) return res.status(404).json({ message: "Not found" });
-    res.json({ message: "Deleted successfully" });
-  } catch (error) {
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// POST: Create new donation request
-app.post("/donation-request", async (req, res) => {
-  try {
-    const {
-      requesterName,
-      requesterEmail,
-      recipientName,
-      district,
-      upazila,
-      hospitalName,
-      fullAddress,
-      bloodGroup,
-      donationDate,
-      donationTime,
-      requestMessage,
-      status = "pending", // Default status
-    } = req.body;
-
-    const newRequest = new DonationRequest({
-      requesterName,
-      requesterEmail,
-      recipientName,
-      district,
-      upazila,
-      hospitalName,
-      fullAddress,
-      bloodGroup,
-      donationDate,
-      donationTime,
-      requestMessage,
-      status,
-      createdAt: new Date(),
+        const result = await userCollections.insertOne(userInfo);
+        res.status(201).json(result);
+      } catch (error) {
+        console.error("Create user error:", error);
+        res.status(500).json({ message: "Failed to create user" });
+      }
     });
 
-    await newRequest.save();
-    res.status(201).json({ message: "Donation request created successfully" });
+    // 3. Get single user by email
+    app.get("/users/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+        const user = await userCollections.findOne({ email: email });
+
+        if (!user) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        res.json(user);
+      } catch (error) {
+        console.error("Error fetching user:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // 4. Update user profile - এখানে ভুল ঠিক করা হয়েছে
+    app.patch("/users/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+        const updates = req.body;
+
+        // ইমেইল চেঞ্জ করা যাবে না
+        delete updates.email;
+
+        const result = await userCollections.updateOne(
+          { email: email }, // <-- এখানে ঠিক করা হয়েছে
+          { $set: updates }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        res.json({ message: "Profile updated successfully" });
+      } catch (error) {
+        console.error("Update profile error:", error);
+        res.status(500).json({ 
+          message: "Server error", 
+          details: error.message 
+        });
+      }
+    });
+
+    // 5. Get user role & status
+    app.get("/user/role/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+        const user = await userCollections.findOne({ email: email });
+        if (!user) {
+          return res.status(404).json({ message: "User not found" });
+        }
+        res.json({ role: user.role || "donor", status: user.status || "active" });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // 6. Public: Search donors
+    app.get("/search/donors", async (req, res) => {
+      try {
+        const { bloodGroup, district, upazila } = req.query;
+        let query = { role: "donor", status: "active" };
+
+        if (bloodGroup) query.bloodGroup = bloodGroup;
+        if (district) query.district = district;
+        if (upazila) query.upazila = upazila;
+
+        const donors = await userCollections.find(query)
+          .project({ name: 1, bloodGroup: 1, district: 1, upazila: 1, photoURL: 1, status: 1 })
+          .toArray();
+
+        res.json(donors);
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // 7. CREATE Donation Request
+    app.post("/donation-requests", async (req, res) => {
+      try {
+        const requestData = req.body;
+        requestData.status = "pending";
+        requestData.createdAt = new Date();
+
+        const result = await donationRequestsCollection.insertOne(requestData);
+        res.status(201).json({ message: "Request created", id: result.insertedId });
+      } catch (error) {
+        console.error("Create request error:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // 8. GET: My Donation Requests
+    app.get("/my-donation-requests/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+        const limit = parseInt(req.query.limit) || 0;
+
+        let cursor = donationRequestsCollection
+          .find({ requesterEmail: email })
+          .sort({ createdAt: -1 })
+          .project({
+            recipientName: 1,
+            bloodGroup: 1,
+            district: 1,
+            upazila: 1,
+            donationDate: 1,
+            donationTime: 1,
+            status: 1,
+            donorName: 1,
+            donorEmail: 1
+          });
+
+        if (limit > 0) cursor = cursor.limit(limit);
+
+        const requests = await cursor.toArray();
+        res.json(requests);
+      } catch (error) {
+        console.error("Error fetching my requests:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // 9. Confirm donation (inprogress)
+    app.patch("/donation-requests/:id/donate", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { donorName, donorEmail } = req.body;
+
+        const result = await donationRequestsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              status: "inprogress",
+              donorName,
+              donorEmail,
+              donatedAt: new Date()
+            }
+          }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "Request not found" });
+        }
+
+        res.json({ message: "Donation confirmed" });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // 10. Update status (done / canceled)
+    app.patch("/donation-requests/:id/status", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { status } = req.body;
+
+        const result = await donationRequestsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "Request not found" });
+        }
+
+        res.json({ message: "Status updated" });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // 11. Delete donation request
+    app.delete("/donation-requests/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const result = await donationRequestsCollection.deleteOne({ _id: new ObjectId(id) });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).json({ message: "Request not found" });
+        }
+
+        res.json({ message: "Deleted successfully" });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    console.log("Successfully connected to MongoDB!");
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-
-
-
-
-
-    // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
-  } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
+    console.error("MongoDB connection error:", error);
   }
 }
+
 run().catch(console.dir);
 
-
-
 app.get('/', (req, res) => {
-  res.send('Blood donation server is running')
-})
+  res.send('Blood donation server is running');
+});
 
 app.listen(port, () => {
-  console.log(`Blood server is running on port ${port}`)
-})
+  console.log(`Blood server is running on port ${port}`);
+});
