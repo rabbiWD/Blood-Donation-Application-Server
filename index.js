@@ -176,6 +176,48 @@ app.delete("/donation-requests/:id", async (req, res) => {
   }
 });
 
+// POST: Create new donation request
+app.post("/donation-request", async (req, res) => {
+  try {
+    const {
+      requesterName,
+      requesterEmail,
+      recipientName,
+      district,
+      upazila,
+      hospitalName,
+      fullAddress,
+      bloodGroup,
+      donationDate,
+      donationTime,
+      requestMessage,
+      status = "pending", // Default status
+    } = req.body;
+
+    const newRequest = new DonationRequest({
+      requesterName,
+      requesterEmail,
+      recipientName,
+      district,
+      upazila,
+      hospitalName,
+      fullAddress,
+      bloodGroup,
+      donationDate,
+      donationTime,
+      requestMessage,
+      status,
+      createdAt: new Date(),
+    });
+
+    await newRequest.save();
+    res.status(201).json({ message: "Donation request created successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 
 
 
