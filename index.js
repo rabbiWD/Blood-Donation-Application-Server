@@ -303,6 +303,108 @@ app.delete("/donation-request/:id", async (req, res) => {
   }
 });
 
+// Update user (status or role)
+app.patch("/users/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+    const updates = req.body; // { status: "blocked" } or { role: "admin" }
+
+    const result = await userCollections.updateOne(
+      { email },
+      { $set: updates }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json({ message: "User updated successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET: All blood donation requests with pagination and filters (for Admin)
+app.get("/all-blood-donation-request", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const { status, bloodGroup, district } = req.query;
+
+    // Build query
+    let query = {};
+
+    if (status && status !== "") query.status = status;
+    if (bloodGroup && bloodGroup !== "") query.bloodGroup = bloodGroup;
+    if (district && district.trim() !== "") query.district = { $regex: new RegExp(district.trim(), "i") }; // case-insensitive partial match
+
+    // Fetch total count for pagination
+    const totalRequests = await donationRequestsCollection.countDocuments(query);
+
+    // Fetch requests with sorting, skip, limit
+    const requests = await donationRequestsCollection
+      .find(query)
+      .sort({ createdAt: -1 }) // newest first
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
+    // Prepare response
+    const pagination = {
+      currentPage: page,
+      totalPages: Math.ceil(totalRequests / limit),
+      totalRequests,
+      hasNext: page < Math.ceil(totalRequests / limit),
+      hasPrev: page > 1,
+    };
+
+    res.json({
+      requests,
+      pagination,
+    });
+  } catch (error) {
+    console.error("Error fetching all donation requests:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Confirm donation - change status to inprogress
+app.patch("/donation-requests/:id/donate", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { donorName, donorEmail } = req.body;
+
+    // Validate ID
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid request ID" });
+    }
+
+    const result = await donationRequestsCollection.updateOne(
+      { _id: new ObjectId(id), status: "pending" }, // Only pending can be donated
+      {
+        $set: {
+          status: "inprogress",
+          donorName,
+          donorEmail,
+          donatedAt: new Date()
+        }
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Request not found or already donated" });
+    }
+
+    res.json({ message: "Donation confirmed successfully!" });
+  } catch (error) {
+    console.error("Error confirming donation:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 // My Donation Requests - plural করুন
 app.get("/my-donation-request/:email", async (req, res) => {
   try {
