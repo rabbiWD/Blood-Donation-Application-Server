@@ -149,6 +149,22 @@ app.get("/my-donation-request/:email", async (req, res) => {
   }
 });
 
+// 2. Update status (Done / Cancel)
+app.patch("/donation-request/:id/status", async (req, res) => {
+  try {
+    const { status } = req.body;
+    const updated = await DonationRequest.findByIdAndUpdate(
+      req.params.id,
+      { status },
+      { new: true }
+    );
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 
 
 
