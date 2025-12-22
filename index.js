@@ -134,119 +134,336 @@ async function run() {
       }
     });
 
-    // 7. CREATE Donation Request
-    app.post("/donation-requests", async (req, res) => {
-      try {
-        const requestData = req.body;
-        requestData.status = "pending";
-        requestData.createdAt = new Date();
+    // GET: Single donation request details (Details + Edit পেজের জন্য জরুরি!)
+app.get("/donation-requests/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
 
-        const result = await donationRequestsCollection.insertOne(requestData);
-        res.status(201).json({ message: "Request created", id: result.insertedId });
-      } catch (error) {
-        console.error("Create request error:", error);
-        res.status(500).json({ message: "Server error" });
+    // ObjectId চেক করুন (যদি invalid ID হয়)
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid request ID" });
+    }
+
+    const request = await donationRequestsCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!request) {
+      return res.status(404).json({ message: "Donation request not found" });
+    }
+
+    res.json(request);
+  } catch (error) {
+    console.error("Error fetching donation request:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+    // 7. CREATE Donation Request - plural করুন
+app.post("/donation-request", async (req, res) => {
+  try {
+    const requestData = req.body;
+    requestData.status = "pending";
+    requestData.createdAt = new Date();
+
+    const result = await donationRequestsCollection.insertOne(requestData);
+    res.status(201).json({ message: "Request created", id: result.insertedId });
+  } catch (error) {
+    console.error("Create request error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// 8. GET: Single donation request - এটা যোগ করুন (জরুরি!)
+app.get("/donation-request/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const request = await donationRequestsCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!request) {
+      return res.status(404).json({ message: "Request not found" });
+    }
+
+    res.json(request);
+  } catch (error) {
+    console.error("Error fetching request:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// UPDATE: General update for donation request (for Edit page)
+app.patch("/donation-request/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    // Optional: Allow only certain fields
+    const allowedFields = [
+      "recipientName",
+      "hospitalName",
+      "fullAddress",
+      "bloodGroup",
+      "district",
+      "upazila",
+      "donationDate",
+      "donationTime",
+      "requestMessage"
+    ];
+
+    const filteredUpdates = {};
+    allowedFields.forEach(field => {
+      if (updates[field] !== undefined) {
+        filteredUpdates[field] = updates[field];
       }
     });
 
-    // 8. GET: My Donation Requests
-    app.get("/my-donation-requests/:email", async (req, res) => {
-      try {
-        const { email } = req.params;
-        const limit = parseInt(req.query.limit) || 0;
+    if (Object.keys(filteredUpdates).length === 0) {
+      return res.status(400).json({ message: "No valid fields to update" });
+    }
 
-        let cursor = donationRequestsCollection
-          .find({ requesterEmail: email })
-          .sort({ createdAt: -1 })
-          .project({
-            recipientName: 1,
-            bloodGroup: 1,
-            district: 1,
-            upazila: 1,
-            donationDate: 1,
-            donationTime: 1,
-            status: 1,
-            donorName: 1,
-            donorEmail: 1
-          });
+    const result = await donationRequestsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: filteredUpdates }
+    );
 
-        if (limit > 0) cursor = cursor.limit(limit);
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Request not found" });
+    }
 
-        const requests = await cursor.toArray();
-        res.json(requests);
-      } catch (error) {
-        console.error("Error fetching my requests:", error);
-        res.status(500).json({ message: "Server error" });
-      }
-    });
+    res.json({ message: "Request updated successfully" });
+  } catch (error) {
+    console.error("Error updating donation request:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 
-    // 9. Confirm donation (inprogress)
-    app.patch("/donation-requests/:id/donate", async (req, res) => {
-      try {
-        const { id } = req.params;
-        const { donorName, donorEmail } = req.body;
+// 9. Confirm donation - plural
+app.patch("/donation-request/:id/donate", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { donorName, donorEmail } = req.body;
 
-        const result = await donationRequestsCollection.updateOne(
-          { _id: new ObjectId(id) },
-          {
-            $set: {
-              status: "inprogress",
-              donorName,
-              donorEmail,
-              donatedAt: new Date()
-            }
-          }
-        );
-
-        if (result.matchedCount === 0) {
-          return res.status(404).json({ message: "Request not found" });
+    const result = await donationRequestsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          status: "inprogress",
+          donorName,
+          donorEmail,
+          donatedAt: new Date()
         }
-
-        res.json({ message: "Donation confirmed" });
-      } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Server error" });
       }
-    });
+    );
 
-    // 10. Update status (done / canceled)
-    app.patch("/donation-requests/:id/status", async (req, res) => {
-      try {
-        const { id } = req.params;
-        const { status } = req.body;
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Request not found" });
+    }
 
-        const result = await donationRequestsCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { status } }
-        );
+    res.json({ message: "Donation confirmed" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 
-        if (result.matchedCount === 0) {
-          return res.status(404).json({ message: "Request not found" });
-        }
+// 10. Update status - plural
+app.patch("/donation-request/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
 
-        res.json({ message: "Status updated" });
-      } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Server error" });
-      }
-    });
+    const result = await donationRequestsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status } }
+    );
 
-    // 11. Delete donation request
-    app.delete("/donation-requests/:id", async (req, res) => {
-      try {
-        const { id } = req.params;
-        const result = await donationRequestsCollection.deleteOne({ _id: new ObjectId(id) });
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Request not found" });
+    }
 
-        if (result.deletedCount === 0) {
-          return res.status(404).json({ message: "Request not found" });
-        }
+    res.json({ message: "Status updated" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 
-        res.json({ message: "Deleted successfully" });
-      } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Server error" });
-      }
-    });
+// 11. Delete donation request - plural
+app.delete("/donation-request/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await donationRequestsCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: "Request not found" });
+    }
+
+    res.json({ message: "Deleted successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// My Donation Requests - plural করুন
+app.get("/my-donation-request/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+    const limit = parseInt(req.query.limit) || 0;
+
+    let cursor = donationRequestsCollection
+      .find({ requesterEmail: email })
+      .sort({ createdAt: -1 })
+      .project({
+        recipientName: 1,
+        bloodGroup: 1,
+        district: 1,
+        upazila: 1,
+        donationDate: 1,
+        donationTime: 1,
+        status: 1,
+        donorName: 1,
+        donorEmail: 1
+      });
+
+    if (limit > 0) cursor = cursor.limit(limit);
+
+    const requests = await cursor.toArray();
+    res.json(requests);
+  } catch (error) {
+    console.error("Error fetching my requests:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+//     // 7. CREATE Donation Request
+//     app.post("/donation-request", async (req, res) => {
+//       try {
+//         const requestData = req.body;
+//         requestData.status = "pending";
+//         requestData.createdAt = new Date();
+
+//         const result = await donationRequestsCollection.insertOne(requestData);
+//         res.status(201).json({ message: "Request created", id: result.insertedId });
+//       } catch (error) {
+//         console.error("Create request error:", error);
+//         res.status(500).json({ message: "Server error" });
+//       }
+//     });
+
+//     // CREATE Donation Request get
+//   app.get("/donation-request/:id", async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const request = await donationRequestsCollection.findOne({ _id: new ObjectId(id) });
+
+//     if (!request) {
+//       return res.status(404).json({ message: "Request not found" });
+//     }
+
+//     res.json(request);
+//   } catch (error) {
+//     console.error("Error fetching request:", error);
+//     res.status(500).json({ message: "Server error" });
+//   }
+// });
+
+//     // 8. GET: My Donation Requests
+//     app.get("/my-donation-request/:email", async (req, res) => {
+//       try {
+//         const { email } = req.params;
+//         const limit = parseInt(req.query.limit) || 0;
+
+//         let cursor = donationRequestsCollection
+//           .find({ requesterEmail: email })
+//           .sort({ createdAt: -1 })
+//           .project({
+//             recipientName: 1,
+//             bloodGroup: 1,
+//             district: 1,
+//             upazila: 1,
+//             donationDate: 1,
+//             donationTime: 1,
+//             status: 1,
+//             donorName: 1,
+//             donorEmail: 1
+//           });
+
+//         if (limit > 0) cursor = cursor.limit(limit);
+
+//         const requests = await cursor.toArray();
+//         res.json(requests);
+//       } catch (error) {
+//         console.error("Error fetching my requests:", error);
+//         res.status(500).json({ message: "Server error" });
+//       }
+//     });
+
+//     // 9. Confirm donation (inprogress)
+//     app.patch("/donation-request/:id/donate", async (req, res) => {
+//       try {
+//         const { id } = req.params;
+//         const { donorName, donorEmail } = req.body;
+
+//         const result = await donationRequestsCollection.updateOne(
+//           { _id: new ObjectId(id) },
+//           {
+//             $set: {
+//               status: "inprogress",
+//               donorName,
+//               donorEmail,
+//               donatedAt: new Date()
+//             }
+//           }
+//         );
+
+//         if (result.matchedCount === 0) {
+//           return res.status(404).json({ message: "Request not found" });
+//         }
+
+//         res.json({ message: "Donation confirmed" });
+//       } catch (error) {
+//         console.error(error);
+//         res.status(500).json({ message: "Server error" });
+//       }
+//     });
+
+//     // 10. Update status (done / canceled)
+//     app.patch("/donation-request/:id/status", async (req, res) => {
+//       try {
+//         const { id } = req.params;
+//         const { status } = req.body;
+
+//         const result = await donationRequestsCollection.updateOne(
+//           { _id: new ObjectId(id) },
+//           { $set: { status } }
+//         );
+
+//         if (result.matchedCount === 0) {
+//           return res.status(404).json({ message: "Request not found" });
+//         }
+
+//         res.json({ message: "Status updated" });
+//       } catch (error) {
+//         console.error(error);
+//         res.status(500).json({ message: "Server error" });
+//       }
+//     });
+
+//     // 11. Delete donation request
+//     app.delete("/donation-request/:id", async (req, res) => {
+//       try {
+//         const { id } = req.params;
+//         const result = await donationRequestsCollection.deleteOne({ _id: new ObjectId(id) });
+
+//         if (result.deletedCount === 0) {
+//           return res.status(404).json({ message: "Request not found" });
+//         }
+
+//         res.json({ message: "Deleted successfully" });
+//       } catch (error) {
+//         console.error(error);
+//         res.status(500).json({ message: "Server error" });
+//       }
+//     });
 
     console.log("Successfully connected to MongoDB!");
   } catch (error) {
