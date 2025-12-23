@@ -3,6 +3,7 @@ const cors = require('cors');
 const app = express();
 require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const port = process.env.PORT || 3000;
 
 app.use(cors());
@@ -20,13 +21,17 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
 
     const db = client.db('blood_db');
     const userCollections = db.collection('users');
     const donationRequestsCollection = db.collection('donation_requests');
+    const fundingCollection = db.collection('fundings');
 
-    // 1. Total users count
+    console.log("Successfully connected to MongoDB!");
+
+    // ==================== USER ROUTES ====================
+
     app.get("/users", async (req, res) => {
       try {
         const total = await userCollections.countDocuments({});
@@ -37,7 +42,6 @@ async function run() {
       }
     });
 
-    // 2. Create user (on registration)
     app.post('/users', async (req, res) => {
       try {
         const userInfo = req.body;
@@ -53,16 +57,11 @@ async function run() {
       }
     });
 
-    // 3. Get single user by email
     app.get("/users/:email", async (req, res) => {
       try {
         const { email } = req.params;
-        const user = await userCollections.findOne({ email: email });
-
-        if (!user) {
-          return res.status(404).json({ message: "User not found" });
-        }
-
+        const user = await userCollections.findOne({ email });
+        if (!user) return res.status(404).json({ message: "User not found" });
         res.json(user);
       } catch (error) {
         console.error("Error fetching user:", error);
@@ -70,42 +69,24 @@ async function run() {
       }
     });
 
-    // 4. Update user profile - এখানে ভুল ঠিক করা হয়েছে
     app.patch("/users/:email", async (req, res) => {
       try {
         const { email } = req.params;
         const updates = req.body;
-
-        // ইমেইল চেঞ্জ করা যাবে না
-        delete updates.email;
-
-        const result = await userCollections.updateOne(
-          { email: email }, // <-- এখানে ঠিক করা হয়েছে
-          { $set: updates }
-        );
-
-        if (result.matchedCount === 0) {
-          return res.status(404).json({ message: "User not found" });
-        }
-
-        res.json({ message: "Profile updated successfully" });
+        const result = await userCollections.updateOne({ email }, { $set: updates });
+        if (result.matchedCount === 0) return res.status(404).json({ message: "User not found" });
+        res.json({ message: "User updated successfully" });
       } catch (error) {
-        console.error("Update profile error:", error);
-        res.status(500).json({ 
-          message: "Server error", 
-          details: error.message 
-        });
+        console.error("Update user error:", error);
+        res.status(500).json({ message: "Server error" });
       }
     });
 
-    // 5. Get user role & status
     app.get("/user/role/:email", async (req, res) => {
       try {
         const { email } = req.params;
-        const user = await userCollections.findOne({ email: email });
-        if (!user) {
-          return res.status(404).json({ message: "User not found" });
-        }
+        const user = await userCollections.findOne({ email });
+        if (!user) return res.status(404).json({ message: "User not found" });
         res.json({ role: user.role || "donor", status: user.status || "active" });
       } catch (error) {
         console.error(error);
@@ -113,18 +94,28 @@ async function run() {
       }
     });
 
-    // 6. Public: Search donors
+    // Fixed: Only one /all-users route
+    app.get("/all-users", async (req, res) => {
+      try {
+        const allUsers = await userCollections.find({}).toArray();
+        res.json(allUsers);
+      } catch (error) {
+        console.error("Error fetching all users:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // Public: Search donors
     app.get("/search/donors", async (req, res) => {
       try {
         const { bloodGroup, district, upazila } = req.query;
         let query = { role: "donor", status: "active" };
-
         if (bloodGroup) query.bloodGroup = bloodGroup;
         if (district) query.district = district;
         if (upazila) query.upazila = upazila;
 
         const donors = await userCollections.find(query)
-          .project({ name: 1, bloodGroup: 1, district: 1, upazila: 1, photoURL: 1, status: 1 })
+          .project({ name: 1, bloodGroup: 1, district: 1, upazila: 1, photoURL: 1 })
           .toArray();
 
         res.json(donors);
@@ -134,440 +125,257 @@ async function run() {
       }
     });
 
-    // GET: Single donation request details (Details + Edit পেজের জন্য জরুরি!)
-app.get("/donation-requests/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
+    // ==================== DONATION REQUEST ROUTES ====================
 
-    // ObjectId চেক করুন (যদি invalid ID হয়)
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ message: "Invalid request ID" });
-    }
+    app.post("/donation-request", async (req, res) => {
+      try {
+        const requestData = req.body;
+        requestData.status = "pending";
+        requestData.createdAt = new Date();
 
-    const request = await donationRequestsCollection.findOne({ _id: new ObjectId(id) });
-
-    if (!request) {
-      return res.status(404).json({ message: "Donation request not found" });
-    }
-
-    res.json(request);
-  } catch (error) {
-    console.error("Error fetching donation request:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-    // 7. CREATE Donation Request - plural করুন
-app.post("/donation-request", async (req, res) => {
-  try {
-    const requestData = req.body;
-    requestData.status = "pending";
-    requestData.createdAt = new Date();
-
-    const result = await donationRequestsCollection.insertOne(requestData);
-    res.status(201).json({ message: "Request created", id: result.insertedId });
-  } catch (error) {
-    console.error("Create request error:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// 8. GET: Single donation request - এটা যোগ করুন (জরুরি!)
-app.get("/donation-request/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const request = await donationRequestsCollection.findOne({ _id: new ObjectId(id) });
-
-    if (!request) {
-      return res.status(404).json({ message: "Request not found" });
-    }
-
-    res.json(request);
-  } catch (error) {
-    console.error("Error fetching request:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// UPDATE: General update for donation request (for Edit page)
-app.patch("/donation-request/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body;
-
-    // Optional: Allow only certain fields
-    const allowedFields = [
-      "recipientName",
-      "hospitalName",
-      "fullAddress",
-      "bloodGroup",
-      "district",
-      "upazila",
-      "donationDate",
-      "donationTime",
-      "requestMessage"
-    ];
-
-    const filteredUpdates = {};
-    allowedFields.forEach(field => {
-      if (updates[field] !== undefined) {
-        filteredUpdates[field] = updates[field];
+        const result = await donationRequestsCollection.insertOne(requestData);
+        res.status(201).json({ message: "Request created", id: result.insertedId });
+      } catch (error) {
+        console.error("Create request error:", error);
+        res.status(500).json({ message: "Server error" });
       }
     });
 
-    if (Object.keys(filteredUpdates).length === 0) {
-      return res.status(400).json({ message: "No valid fields to update" });
-    }
-
-    const result = await donationRequestsCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: filteredUpdates }
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ message: "Request not found" });
-    }
-
-    res.json({ message: "Request updated successfully" });
-  } catch (error) {
-    console.error("Error updating donation request:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// 9. Confirm donation - plural
-app.patch("/donation-request/:id/donate", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { donorName, donorEmail } = req.body;
-
-    const result = await donationRequestsCollection.updateOne(
-      { _id: new ObjectId(id) },
-      {
-        $set: {
-          status: "inprogress",
-          donorName,
-          donorEmail,
-          donatedAt: new Date()
-        }
+    app.get("/donation-request/pending", async (req, res) => {
+      try {
+        const requests = await donationRequestsCollection
+          .find({ status: "pending" })
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.json(requests);
+      } catch (error) {
+        console.error("Error fetching pending requests:", error);
+        res.status(500).json({ message: "Server error" });
       }
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ message: "Request not found" });
-    }
-
-    res.json({ message: "Donation confirmed" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// 10. Update status - plural
-app.patch("/donation-request/:id/status", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status } = req.body;
-
-    const result = await donationRequestsCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { status } }
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ message: "Request not found" });
-    }
-
-    res.json({ message: "Status updated" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// 11. Delete donation request - plural
-app.delete("/donation-request/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const result = await donationRequestsCollection.deleteOne({ _id: new ObjectId(id) });
-
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ message: "Request not found" });
-    }
-
-    res.json({ message: "Deleted successfully" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// Update user (status or role)
-app.patch("/users/:email", async (req, res) => {
-  try {
-    const { email } = req.params;
-    const updates = req.body; // { status: "blocked" } or { role: "admin" }
-
-    const result = await userCollections.updateOne(
-      { email },
-      { $set: updates }
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    res.json({ message: "User updated successfully" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// GET: All blood donation requests with pagination and filters (for Admin)
-app.get("/all-blood-donation-request", async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-
-    const { status, bloodGroup, district } = req.query;
-
-    // Build query
-    let query = {};
-
-    if (status && status !== "") query.status = status;
-    if (bloodGroup && bloodGroup !== "") query.bloodGroup = bloodGroup;
-    if (district && district.trim() !== "") query.district = { $regex: new RegExp(district.trim(), "i") }; // case-insensitive partial match
-
-    // Fetch total count for pagination
-    const totalRequests = await donationRequestsCollection.countDocuments(query);
-
-    // Fetch requests with sorting, skip, limit
-    const requests = await donationRequestsCollection
-      .find(query)
-      .sort({ createdAt: -1 }) // newest first
-      .skip(skip)
-      .limit(limit)
-      .toArray();
-
-    // Prepare response
-    const pagination = {
-      currentPage: page,
-      totalPages: Math.ceil(totalRequests / limit),
-      totalRequests,
-      hasNext: page < Math.ceil(totalRequests / limit),
-      hasPrev: page > 1,
-    };
-
-    res.json({
-      requests,
-      pagination,
     });
-  } catch (error) {
-    console.error("Error fetching all donation requests:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
 
-// Confirm donation - change status to inprogress
-app.patch("/donation-requests/:id/donate", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { donorName, donorEmail } = req.body;
+    app.get("/donation-request/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid ID" });
 
-    // Validate ID
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ message: "Invalid request ID" });
-    }
+        const request = await donationRequestsCollection.findOne({ _id: new ObjectId(id) });
+        if (!request) return res.status(404).json({ message: "Request not found" });
 
-    const result = await donationRequestsCollection.updateOne(
-      { _id: new ObjectId(id), status: "pending" }, // Only pending can be donated
-      {
-        $set: {
-          status: "inprogress",
-          donorName,
-          donorEmail,
-          donatedAt: new Date()
-        }
+        res.json(request);
+      } catch (error) {
+        console.error("Error fetching request:", error);
+        res.status(500).json({ message: "Server error" });
       }
-    );
+    });
 
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ message: "Request not found or already donated" });
-    }
+    app.patch("/donation-request/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const updates = req.body;
 
-    res.json({ message: "Donation confirmed successfully!" });
-  } catch (error) {
-    console.error("Error confirming donation:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
+        const allowed = ["recipientName", "hospitalName", "fullAddress", "bloodGroup", "district", "upazila", "donationDate", "donationTime", "requestMessage"];
+        const filtered = {};
+        allowed.forEach(f => {
+          if (updates[f] !== undefined) filtered[f] = updates[f];
+        });
 
-// My Donation Requests - plural করুন
-app.get("/my-donation-request/:email", async (req, res) => {
-  try {
-    const { email } = req.params;
-    const limit = parseInt(req.query.limit) || 0;
+        if (Object.keys(filtered).length === 0) return res.status(400).json({ message: "No fields to update" });
 
-    let cursor = donationRequestsCollection
-      .find({ requesterEmail: email })
-      .sort({ createdAt: -1 })
-      .project({
-        recipientName: 1,
-        bloodGroup: 1,
-        district: 1,
-        upazila: 1,
-        donationDate: 1,
-        donationTime: 1,
-        status: 1,
-        donorName: 1,
-        donorEmail: 1
-      });
+        const result = await donationRequestsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: filtered }
+        );
 
-    if (limit > 0) cursor = cursor.limit(limit);
+        if (result.matchedCount === 0) return res.status(404).json({ message: "Request not found" });
 
-    const requests = await cursor.toArray();
-    res.json(requests);
-  } catch (error) {
-    console.error("Error fetching my requests:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
+        res.json({ message: "Request updated successfully" });
+      } catch (error) {
+        console.error("Update error:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
 
-//     // 7. CREATE Donation Request
-//     app.post("/donation-request", async (req, res) => {
-//       try {
-//         const requestData = req.body;
-//         requestData.status = "pending";
-//         requestData.createdAt = new Date();
+    app.patch("/donation-request/:id/donate", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { donorName, donorEmail } = req.body;
 
-//         const result = await donationRequestsCollection.insertOne(requestData);
-//         res.status(201).json({ message: "Request created", id: result.insertedId });
-//       } catch (error) {
-//         console.error("Create request error:", error);
-//         res.status(500).json({ message: "Server error" });
-//       }
-//     });
+        const result = await donationRequestsCollection.updateOne(
+          { _id: new ObjectId(id), status: "pending" },
+          { $set: { status: "inprogress", donorName, donorEmail, donatedAt: new Date() } }
+        );
 
-//     // CREATE Donation Request get
-//   app.get("/donation-request/:id", async (req, res) => {
-//   try {
-//     const { id } = req.params;
-//     const request = await donationRequestsCollection.findOne({ _id: new ObjectId(id) });
+        if (result.matchedCount === 0) return res.status(404).json({ message: "Request not found or already taken" });
 
-//     if (!request) {
-//       return res.status(404).json({ message: "Request not found" });
-//     }
+        res.json({ message: "Donation confirmed" });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
 
-//     res.json(request);
-//   } catch (error) {
-//     console.error("Error fetching request:", error);
-//     res.status(500).json({ message: "Server error" });
-//   }
-// });
+    app.patch("/donation-request/:id/status", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { status } = req.body;
+        if (!["done", "canceled"].includes(status)) return res.status(400).json({ message: "Invalid status" });
 
-//     // 8. GET: My Donation Requests
-//     app.get("/my-donation-request/:email", async (req, res) => {
-//       try {
-//         const { email } = req.params;
-//         const limit = parseInt(req.query.limit) || 0;
+        const result = await donationRequestsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status } }
+        );
 
-//         let cursor = donationRequestsCollection
-//           .find({ requesterEmail: email })
-//           .sort({ createdAt: -1 })
-//           .project({
-//             recipientName: 1,
-//             bloodGroup: 1,
-//             district: 1,
-//             upazila: 1,
-//             donationDate: 1,
-//             donationTime: 1,
-//             status: 1,
-//             donorName: 1,
-//             donorEmail: 1
-//           });
+        if (result.matchedCount === 0) return res.status(404).json({ message: "Request not found" });
 
-//         if (limit > 0) cursor = cursor.limit(limit);
+        res.json({ message: "Status updated" });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
 
-//         const requests = await cursor.toArray();
-//         res.json(requests);
-//       } catch (error) {
-//         console.error("Error fetching my requests:", error);
-//         res.status(500).json({ message: "Server error" });
-//       }
-//     });
+    app.delete("/donation-request/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const result = await donationRequestsCollection.deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) return res.status(404).json({ message: "Request not found" });
 
-//     // 9. Confirm donation (inprogress)
-//     app.patch("/donation-request/:id/donate", async (req, res) => {
-//       try {
-//         const { id } = req.params;
-//         const { donorName, donorEmail } = req.body;
+        res.json({ message: "Deleted successfully" });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
 
-//         const result = await donationRequestsCollection.updateOne(
-//           { _id: new ObjectId(id) },
-//           {
-//             $set: {
-//               status: "inprogress",
-//               donorName,
-//               donorEmail,
-//               donatedAt: new Date()
-//             }
-//           }
-//         );
+    app.get("/my-donation-request/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+        const limit = parseInt(req.query.limit) || 0;
 
-//         if (result.matchedCount === 0) {
-//           return res.status(404).json({ message: "Request not found" });
-//         }
+        let cursor = donationRequestsCollection
+          .find({ requesterEmail: email })
+          .sort({ createdAt: -1 })
+          .project({
+            recipientName: 1,
+            bloodGroup: 1,
+            district: 1,
+            upazila: 1,
+            donationDate: 1,
+            donationTime: 1,
+            status: 1,
+            donorName: 1,
+            donorEmail: 1
+          });
 
-//         res.json({ message: "Donation confirmed" });
-//       } catch (error) {
-//         console.error(error);
-//         res.status(500).json({ message: "Server error" });
-//       }
-//     });
+        if (limit > 0) cursor = cursor.limit(limit);
 
-//     // 10. Update status (done / canceled)
-//     app.patch("/donation-request/:id/status", async (req, res) => {
-//       try {
-//         const { id } = req.params;
-//         const { status } = req.body;
+        const requests = await cursor.toArray();
+        res.json(requests);
+      } catch (error) {
+        console.error("Error fetching my requests:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
 
-//         const result = await donationRequestsCollection.updateOne(
-//           { _id: new ObjectId(id) },
-//           { $set: { status } }
-//         );
+    app.get("/all-blood-donation-request", async (req, res) => {
+      try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
 
-//         if (result.matchedCount === 0) {
-//           return res.status(404).json({ message: "Request not found" });
-//         }
+        const { status, bloodGroup, district } = req.query;
 
-//         res.json({ message: "Status updated" });
-//       } catch (error) {
-//         console.error(error);
-//         res.status(500).json({ message: "Server error" });
-//       }
-//     });
+        let query = {};
+        if (status && status !== "") query.status = status;
+        if (bloodGroup && bloodGroup !== "") query.bloodGroup = bloodGroup;
+        if (district && district.trim() !== "") query.district = { $regex: new RegExp(district.trim(), "i") };
 
-//     // 11. Delete donation request
-//     app.delete("/donation-request/:id", async (req, res) => {
-//       try {
-//         const { id } = req.params;
-//         const result = await donationRequestsCollection.deleteOne({ _id: new ObjectId(id) });
+        const totalRequests = await donationRequestsCollection.countDocuments(query);
 
-//         if (result.deletedCount === 0) {
-//           return res.status(404).json({ message: "Request not found" });
-//         }
+        const requests = await donationRequestsCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray();
 
-//         res.json({ message: "Deleted successfully" });
-//       } catch (error) {
-//         console.error(error);
-//         res.status(500).json({ message: "Server error" });
-//       }
-//     });
+        const pagination = {
+          currentPage: page,
+          totalPages: Math.ceil(totalRequests / limit),
+          totalRequests,
+        };
 
-    console.log("Successfully connected to MongoDB!");
+        res.json({ requests, pagination });
+      } catch (error) {
+        console.error("Error fetching all requests:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // ==================== FUNDING ROUTES ====================
+
+    app.post("/create-payment-intent", async (req, res) => {
+      const { amount } = req.body;
+      if (!amount || amount < 50) return res.status(400).json({ message: "Minimum 50 BDT" });
+
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: amount * 100,
+          currency: "bdt",
+        });
+
+        res.json({ clientSecret: paymentIntent.client_secret });
+      } catch (err) {
+        console.error("Stripe error:", err);
+        res.status(500).json({ message: "Payment failed" });
+      }
+    });
+
+    app.post("/fundings", async (req, res) => {
+      const { amount, donorName, donorEmail, transactionId } = req.body;
+      if (!amount || !donorName || !donorEmail) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      const newFunding = {
+        amount: parseInt(amount),
+        donorName,
+        donorEmail,
+        transactionId: transactionId || null,
+        createdAt: new Date(),
+      };
+
+      try {
+        const result = await fundingCollection.insertOne(newFunding);
+        res.json({ success: true, message: "Funding recorded successfully", id: result.insertedId });
+      } catch (err) {
+        console.error("Save funding error:", err);
+        res.status(500).json({ message: "Failed to save funding" });
+      }
+    });
+
+    // Fixed: This was causing 500 error due to duplicate/broken route above
+    app.get("/fundings", async (req, res) => {
+      try {
+        const fundings = await fundingCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        const totalResult = await fundingCollection.aggregate([
+          { $group: { _id: null, totalFunding: { $sum: "$amount" } } }
+        ]).toArray();
+
+        const totalFunding = totalResult.length > 0 ? totalResult[0].totalFunding : 0;
+
+        res.json({ fundings, totalFunding });
+      } catch (err) {
+        console.error("Error fetching fundings:", err);
+        res.status(500).json({ fundings: [], totalFunding: 0 });
+      }
+    });
+
   } catch (error) {
     console.error("MongoDB connection error:", error);
   }
